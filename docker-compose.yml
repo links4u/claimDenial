@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database with pgvector extension
+  database:
+    image: ankane/pgvector:latest
+    container_name: claimpilot_db
+    environment:
+      POSTGRES_USER: claimpilot
+      POSTGRES_PASSWORD: claimpilot_dev_password
+      POSTGRES_DB: claimpilot_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U claimpilot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - claimpilot_network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: claimpilot_backend
+    environment:
+      - DATABASE_URL=postgresql://claimpilot:claimpilot_dev_password@database:5432/claimpilot_db
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ENVIRONMENT=development
+      - LOG_LEVEL=INFO
+      - CORS_ORIGINS=http://localhost:2400
+    ports:
+      - "1500:1500"
+    volumes:
+      - ./backend:/app
+      - backend_cache:/app/.cache
+    depends_on:
+      database:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 1500 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1500/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - claimpilot_network
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: claimpilot_frontend
+    environment:
+      - VITE_API_BASE_URL=http://localhost:1500
+      - VITE_APP_NAME=ClaimPilot™
+    ports:
+      - "2400:2400"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    command: npm run dev -- --host 0.0.0.0 --port 2400
+    networks:
+      - claimpilot_network
+
+volumes:
+  postgres_data:
+  backend_cache:
+
+networks:
+  claimpilot_network:
+    driver: bridge
